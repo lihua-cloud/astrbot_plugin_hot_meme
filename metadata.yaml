@@ -1,19 +1,23 @@
 name: hot_meme
 display_name: 智能热梗响应
-short_desc: 自动识别并学习「似冯」「串子」等网络热梗与情绪词，精准+模糊匹配、自然回复
+short_desc: 自动识别网络热梗与情绪词，内置热梗数据源与定时更新，精准+模糊匹配、自然回复
 desc: >-
   自动识别用户输入中的典型网络热梗与情绪性词汇（如「似冯」「串子」等），
   采用关键词精准匹配与语境模糊匹配相结合的方式，内置基础热梗回复库，
   并支持动态学习交互过程中出现的新热梗与回复风格；回复贴合网络语境、自然轻松。
-  提供热梗开关、回复敏感度、自定义热梗映射、白名单防误判等配置项。
+  内置网络热梗数据源：支持本地/远程加载热梗库并按 name 去重合并、定时刷新，
+  提供 /hotmeme random 随机与 /hotmeme <关键词> 按关键词返回完整热梗内容
+  （名称+含义+出处+示例）。提供热梗开关、回复敏感度、数据源、更新间隔、自定义映射、白名单等配置项。
 help: |-
   /hotmeme help —— 查看帮助
-  /hotmeme list —— 查看内置与已学习的热梗
+  /hotmeme list —— 查看内置、网络与已学习的热梗
+  /hotmeme random —— 随机返回一条网络热梗（名称+含义+出处+示例）
+  /hotmeme <关键词> —— 按关键词查找网络热梗
   /hotmeme learn 关键词 回复1|回复2 —— 学习新热梗（管理员）
   /hotmeme forget 关键词 —— 删除某热梗（管理员）
   /hotmeme on / off —— 临时开/关热梗响应（管理员）
   /hotmeme sens 0-100 —— 调整回复敏感度（数字越大越宽松，管理员）
-version: 1.0.0
+version: "1.1.0"
 author: Trae
 repo: https://github.com/lihua-cloud/astrbot_plugin_hot_meme
 astrbot_version: ">=4.13.0"

@@ -34,5 +34,29 @@
     "default": [],
     "description": "白名单过滤：消息中出现这些词时跳过响应，用于防误判（如「羊肉串」「烤串」可避免「串子」误触发）。",
     "title": "白名单过滤"
+  },
+  "enable_hot_source": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用网络热梗数据源（本地/远程加载与定时刷新）。关闭后 /hotmeme random 与 /hotmeme <关键词> 查找不可用。",
+    "title": "启用网络热梗数据源"
+  },
+  "hot_source_urls": {
+    "type": "list",
+    "default": [],
+    "description": "远程热梗数据源 URL 列表（HTTP GET 返回同 schema 的 JSON），定时拉取刷新，按 name 去重合并。",
+    "title": "远程数据源 URL"
+  },
+  "hot_source_data_file": {
+    "type": "string",
+    "default": "",
+    "description": "本地热梗数据文件路径。留空则使用插件自带 data/hot_meme_data.json；填写后改从该文件加载。",
+    "title": "本地数据文件路径"
+  },
+  "update_interval_minutes": {
+    "type": "int",
+    "default": 360,
+    "description": "定时刷新网络热梗数据源的间隔（分钟），默认 360 分钟（6 小时）。",
+    "title": "更新间隔（分钟）"
   }
 }

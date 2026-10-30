@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import os
 import random
 import re
 from copy import deepcopy
@@ -19,6 +20,11 @@ from copy import deepcopy
 from astrbot.api.star import Context, Star
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.core.star.filter.command import GreedyStr
+
+try:
+    from .hot_source import HotMemeSource
+except ImportError:  # 插件可能以单文件方式被加载时退化为同目录导入
+    from hot_source import HotMemeSource
 
 # ---------------------------------------------------------------------------
 # 内置基础热梗回复库
@@ -274,7 +280,8 @@ class MemeEngine:
         self.custom_mappings: dict = {}
         self.learned: dict = {}
         self.candidates: dict[str, int] = {}
-        self._memes = _build_memes(BASE_MEMES, {}, {})
+        self.hot_base: dict = {}
+        self._memes = _build_memes(self._base_memes(), {}, {})
 
     # ---- 配置与状态 ----
     def configure(self, config) -> None:
@@ -297,7 +304,18 @@ class MemeEngine:
         self.candidates = candidates or {}
 
     def _rebuild(self) -> None:
-        self._memes = _build_memes(BASE_MEMES, self.custom_mappings, self.learned)
+        self._memes = _build_memes(self._base_memes(), self.custom_mappings, self.learned)
+
+    def _base_memes(self) -> dict:
+        """返回内置 + 网络热梗合并后的基础条目。"""
+        base = {k: deepcopy(v) for k, v in BASE_MEMES.items()}
+        base.update({k: deepcopy(v) for k, v in self.hot_base.items()})
+        return base
+
+    def load_hot_entries(self, entries: dict) -> None:
+        """把网络热梗数据源条目合并进引擎，供关键词匹配与随机回复使用。"""
+        self.hot_base = {k: deepcopy(v) for k, v in (entries or {}).items()}
+        self._rebuild()
 
     # ---- 匹配 ----
     def _whitelisted(self, haystack: str) -> bool:
@@ -435,6 +453,9 @@ class MemeEngine:
 
 _ENGINE = MemeEngine()
 
+# 网络热梗数据源（模块级单例，供匹配引擎与命令共享）
+_HOT_SOURCE = HotMemeSource()
+
 
 class MemeFilter(filter.CustomFilter):
     """自定义过滤器：仅当消息命中热梗（且达到敏感度）时放行，唤醒机器人。"""
@@ -451,7 +472,12 @@ class Main(Star):
         super().__init__(context, config)
         self.config = config or {}
         _ENGINE.configure(self.config)
+        self.hot_source = _HOT_SOURCE
         self._flush_task: asyncio.Task | None = None
+        self._update_task: asyncio.Task | None = None
+        self._update_interval_minutes = max(
+            1, int(self.config.get("update_interval_minutes", 360) or 360)
+        )
 
     # ---- 生命周期 ----
     async def initialize(self) -> None:
@@ -460,14 +486,25 @@ class Main(Star):
         _ENGINE.set_learned(learned)
         _ENGINE.set_candidates(candidates)
 
+        self.hot_source.logger = self.logger
+        await self._load_hot_source()
+
         if self._flush_task is None:
             self._flush_task = asyncio.create_task(self._flush_loop())
-            self.logger.info("智能热梗插件已启动，内置 %d 条热梗，已学习 %d 条。", len(BASE_MEMES), len(_ENGINE.learned))
+        if self._update_task is None and self._update_interval_minutes > 0:
+            self._update_task = asyncio.create_task(self._update_loop())
+        self.logger.info(
+            "智能热梗插件已启动：内置 %d 条、网络热梗 %d 条、已学习 %d 条。",
+            len(BASE_MEMES), len(_ENGINE.hot_base), len(_ENGINE.learned),
+        )
 
     async def terminate(self) -> None:
         if self._flush_task:
             self._flush_task.cancel()
             self._flush_task = None
+        if self._update_task:
+            self._update_task.cancel()
+            self._update_task = None
         await self._persist()
 
     async def _flush_loop(self) -> None:
@@ -482,6 +519,52 @@ class Main(Star):
         _ENGINE.promote_candidates()
         await self.put_kv_data("learned_memes", _ENGINE.learned)
         await self.put_kv_data("learn_candidates", _ENGINE.candidates)
+
+    # ---- 网络热梗数据源 ----
+    def _hot_source_urls(self) -> list[str]:
+        return [
+            str(u).strip()
+            for u in (self.config.get("hot_source_urls") or [])
+            if str(u).strip()
+        ]
+
+    def _hot_source_data_files(self) -> list[str]:
+        custom = str(self.config.get("hot_source_data_file") or "").strip()
+        if custom:
+            return [custom]
+        default_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "hot_meme_data.json"
+        )
+        return [default_file] if os.path.isfile(default_file) else []
+
+    async def _load_hot_source(self) -> None:
+        """加载网络热梗数据源（失败不影响启动）。"""
+        if not self.config.get("enable_hot_source", True):
+            return
+        await asyncio.to_thread(
+            self.hot_source.refresh, self._hot_source_urls(), self._hot_source_data_files()
+        )
+        _ENGINE.load_hot_entries(self.hot_source.to_engine())
+        if self.hot_source.entries:
+            self.logger.info("网络热梗数据源已加载 %d 条。", len(self.hot_source.entries))
+
+    async def _refresh_hot_source(self) -> None:
+        if not self.config.get("enable_hot_source", True):
+            return
+        await asyncio.to_thread(
+            self.hot_source.refresh, self._hot_source_urls(), self._hot_source_data_files()
+        )
+        _ENGINE.load_hot_entries(self.hot_source.to_engine())
+        self.logger.info("网络热梗数据源已刷新，共 %d 条。", len(self.hot_source.entries))
+
+    async def _update_loop(self) -> None:
+        """定时刷新网络热梗数据源的背景任务（间隔可配置，单位分钟）。"""
+        try:
+            while True:
+                await asyncio.sleep(self._update_interval_minutes * 60)
+                await self._refresh_hot_source()
+        except asyncio.CancelledError:
+            pass
 
     # ---- 热梗响应 ----
     @filter.custom_filter(MemeFilter)
@@ -504,6 +587,8 @@ class Main(Star):
             return MessageEventResult().message(self._help_text()).stop_event()
         if sub in ("list", "列表"):
             return MessageEventResult().message(self._list_text()).stop_event()
+        if sub in ("random", "随机"):
+            return self._cmd_random(event)
         if sub in ("learn", "学习"):
             return await self._cmd_learn(event, parts)
         if sub in ("forget", "删除", "忘"):
@@ -512,7 +597,31 @@ class Main(Star):
             return await self._cmd_toggle(event, sub)
         if sub in ("sens", "sensitivity", "敏感度"):
             return await self._cmd_sens(event, parts)
-        return MessageEventResult().message(self._help_text()).stop_event()
+        # 其余一律视为按关键词查找网络热梗
+        return self._cmd_lookup(event, text)
+
+    def _cmd_random(self, event: AstrMessageEvent) -> MessageEventResult:
+        """随机返回一条网络热梗（名称+含义+出处+示例）。"""
+        if not self.config.get("enable_hot_source", True):
+            return MessageEventResult().message("网络热梗数据源未启用，无法随机返回。").stop_event()
+        entry = self.hot_source.random_pick()
+        if not entry:
+            return MessageEventResult().message("网络热梗库为空，请检查数据源配置。").stop_event()
+        return MessageEventResult().message(self.hot_source.format_entry(entry)).stop_event()
+
+    def _cmd_lookup(self, event: AstrMessageEvent, text: str) -> MessageEventResult:
+        """按关键词查找网络热梗并返回其内容。"""
+        if not self.config.get("enable_hot_source", True):
+            return MessageEventResult().message(self._help_text()).stop_event()
+        keyword = (text or "").strip()
+        if not keyword:
+            return MessageEventResult().message(self._help_text()).stop_event()
+        entry = self.hot_source.find(keyword)
+        if not entry:
+            return MessageEventResult().message(
+                f"未找到热梗「{keyword}」。可用 /hotmeme list 查看已知热梗，或用 /hotmeme random 随机来一条。"
+            ).stop_event()
+        return MessageEventResult().message(self.hot_source.format_entry(entry)).stop_event()
 
     @staticmethod
     def _admin_only(event: AstrMessageEvent) -> MessageEventResult | None:
@@ -587,7 +696,12 @@ class Main(Star):
 
     def _list_text(self) -> str:
         builtin = sum(len(e.get("keywords", [])) for e in BASE_MEMES.values())
-        lines = [f"内置热梗词 {builtin} 个，已学习热梗 {len(_ENGINE.learned)} 个。"]
+        hot_names = list(_ENGINE.hot_base.keys())
+        lines = [
+            f"内置热梗词 {builtin} 个，网络热梗 {len(hot_names)} 个，已学习热梗 {len(_ENGINE.learned)} 个。"
+        ]
+        if hot_names:
+            lines.append("网络热梗：" + "、".join(str(k) for k in hot_names))
         if _ENGINE.learned:
             for kw, entry in _ENGINE.learned.items():
                 n = len(entry.get("replies", []))
@@ -600,10 +714,12 @@ class Main(Star):
     def _help_text() -> str:
         return (
             "智能热梗响应插件\n"
-            "自动识别「似冯」「串子」等热梗与情绪词并回复。\n\n"
+            "自动识别「似冯」「串子」等热梗与情绪词并回复，内置网络热梗数据源。\n\n"
             "命令：\n"
             "/hotmeme help —— 查看帮助\n"
-            "/hotmeme list —— 查看内置与已学习热梗\n"
+            "/hotmeme list —— 查看内置、网络与已学习热梗\n"
+            "/hotmeme random —— 随机返回一条网络热梗（名称+含义+出处+示例）\n"
+            "/hotmeme <关键词> —— 按关键词查找网络热梗\n"
             "/hotmeme learn 关键词 回复1|回复2 —— 学习新热梗（管理员）\n"
             "/hotmeme forget 关键词 —— 删除热梗（管理员）\n"
             "/hotmeme on / off —— 临时开/关（管理员）\n"
