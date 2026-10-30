@@ -1,0 +1,38 @@
+{
+  "enable": {
+    "type": "bool",
+    "default": true,
+    "description": "热梗响应总开关",
+    "title": "热梗开关"
+  },
+  "sensitivity": {
+    "type": "int",
+    "default": 45,
+    "description": "回复敏感度(0-100)。数值越大越宽松，允许更多模糊匹配触发；100 时仅精准匹配。",
+    "title": "回复敏感度"
+  },
+  "fuzzy_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用语境模糊匹配（近义/谐音 + 语境词）。关闭后仅精准关键词匹配。",
+    "title": "启用模糊匹配"
+  },
+  "learn_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "是否允许动态学习新热梗（含命令学习与括号/引号词自动学习）。",
+    "title": "启用动态学习"
+  },
+  "custom_mappings": {
+    "type": "dict",
+    "default": {},
+    "description": "自定义「热梗→回复」映射。键为热梗关键词，值为回复文本或回复列表。",
+    "title": "自定义热梗映射"
+  },
+  "whitelist": {
+    "type": "list",
+    "default": [],
+    "description": "白名单过滤：消息中出现这些词时跳过响应，用于防误判（如「羊肉串」「烤串」可避免「串子」误触发）。",
+    "title": "白名单过滤"
+  }
+}

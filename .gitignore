@@ -1,0 +1,9 @@
+# Python / AstrBot 插件仓库忽略规则
+__pycache__/
+*.py[cod]
+*$py.class
+.git/
+.idea/
+.vscode/
+.DS_Store
+*.log
